@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState } from 'react';
-import { Plus, Trash2, MessageCircle, UserPlus, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import { Plus, Trash2, MessageCircle, UserPlus, X, Loader2 } from 'lucide-react';
 
 interface Patient {
-  id: number;
+  id: string;
   name: string;
   cpf: string;
   address: string;
@@ -13,26 +14,8 @@ interface Patient {
 }
 
 export default function PacientesPage() {
-  // Lista inicial simulada para a demonstração ter dados visíveis de cara
-  const [patients, setPatients] = useState<Patient[]>([
-    {
-      id: 1,
-      name: "João da Silva Sauro",
-      cpf: "123.456.789-00",
-      address: "Rua das Flores, 123 - Centro",
-      phone: "11999999999",
-      payment_type: "plano"
-    },
-    {
-      id: 2,
-      name: "Maria Oliveira",
-      cpf: "987.654.321-11",
-      address: "Av. Principal, 456 - Bairro Alto",
-      phone: "11988888888",
-      payment_type: "dinheiro"
-    }
-  ]);
-
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   
   // Estados do Formulário
@@ -42,36 +25,79 @@ export default function PacientesPage() {
   const [phone, setPhone] = useState('');
   const [paymentType, setPaymentType] = useState<Patient['payment_type']>('dinheiro');
 
-  // Adicionar paciente na memória (Simulado)
-  const handleCreatePatient = (e: React.FormEvent) => {
+  // 🔄 BUSCAR PACIENTES DO SUPABASE (Filtrado automaticamente pelo RLS do seu usuário)
+  async function fetchPatients() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('patients')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (!error && data) {
+      setPatients(data);
+    }
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    fetchPatients();
+  }, []);
+
+  // 💾 SALVAR PACIENTE REAL NO BANCO
+  async function handleCreatePatient(e: React.FormEvent) {
     e.preventDefault();
     if (!name) return;
 
-    // Limpa o telefone para deixar apenas números para o link do WhatsApp
+    // Pega o ID do usuário atualmente logado para vincular o paciente a ele
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      alert("Sessão expirada. Faça login novamente.");
+      return;
+    }
+
+    // Limpa o telefone para salvar apenas números
     const cleanPhone = phone.replace(/\D/g, '');
 
-    const newPatient: Patient = {
-      id: Date.now(), // Gera um ID temporário baseado no tempo
-      name,
-      cpf: cpf || "Não informado",
-      address: address || "Não informado",
-      phone: cleanPhone,
-      payment_type: paymentType
-    };
+    const { error } = await supabase
+      .from('patients')
+      .insert([
+        { 
+          user_id: user.id, // 🔒 Vincula o paciente ao seu perfil de segurança
+          name, 
+          cpf: cpf || null, 
+          address: address || null, 
+          phone: cleanPhone || null, 
+          payment_type: paymentType 
+        }
+      ]);
 
-    setPatients([newPatient, ...patients]);
-    setIsModalOpen(false);
-
-    // Limpar campos do formulário
-    setName(''); setCpf(''); setAddress(''); setPhone(''); setPaymentType('dinheiro');
-  };
-
-  // Excluir paciente da memória (Simulado)
-  const handleDeletePatient = (id: number) => {
-    if (confirm("Tem certeza que deseja excluir este paciente? (Simulação)")) {
-      setPatients(patients.filter(p => p.id !== id));
+    if (!error) {
+      setIsModalOpen(false);
+      // Limpar campos
+      setName(''); setCpf(''); setAddress(''); setPhone(''); setPaymentType('dinheiro');
+      fetchPatients(); // Atualiza a lista vinda do banco
+    } else {
+      console.error(error);
+      alert("Erro ao salvar paciente no banco de dados.");
     }
-  };
+  }
+
+  // ❌ EXCLUIR PACIENTE REAL NO BANCO
+  async function handleDeletePatient(id: string) {
+    if (confirm("Tem certeza que deseja excluir este paciente definitivamente do banco de dados?")) {
+      const { error } = await supabase
+        .from('patients')
+        .delete()
+        .eq('id', id);
+
+      if (!error) {
+        fetchPatients();
+      } else {
+        alert("Erro ao excluir o paciente.");
+      }
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -79,21 +105,25 @@ export default function PacientesPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-slate-800">Meus Pacientes</h1>
-          <p className="text-slate-500 text-sm">Gerencie o cadastro e informações de contato.</p>
+          <p className="text-slate-500 text-sm">Gerencie o cadastro e informações de contato reais.</p>
         </div>
         <button 
           onClick={() => setIsModalOpen(true)}
-          className="w-full sm:w-auto flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2.5 rounded-lg transition-colors shadow-sm text-sm"
+          className="w-full sm:w-auto flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2.5 rounded-lg transition-colors shadow-sm text-sm cursor-pointer"
         >
           <UserPlus size={18} />
           Adicionar Paciente
         </button>
       </div>
 
-      {/* LISTAGEM DE PACIENTES RESPONSIVA */}
-      {patients.length === 0 ? (
+      {/* LISTAGEM DE PACIENTES COM LOADER */}
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <Loader2 className="animate-spin text-indigo-600" size={32} />
+        </div>
+      ) : patients.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-xl border border-dashed border-slate-200 text-slate-400 text-sm">
-          Nenhum paciente cadastrado ainda.
+          Nenhum paciente cadastrado no seu banco de dados ainda.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -107,12 +137,12 @@ export default function PacientesPage() {
                   </span>
                 </div>
                 <div className="text-sm text-slate-500 space-y-1 mt-3">
-                  <p><strong>CPF:</strong> {patient.cpf}</p>
-                  <p className="line-clamp-1"><strong>Endereço:</strong> {patient.address}</p>
+                  <p><strong>CPF:</strong> {patient.cpf || 'Não informado'}</p>
+                  <p className="line-clamp-1"><strong>Endereço:</strong> {patient.address || 'Não informado'}</p>
                 </div>
               </div>
 
-              {/* BOTÕES DE AÇÃO DO CARD */}
+              {/* BOTÕES DE AÇÃO */}
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                 {patient.phone && (
                   <a 
@@ -127,7 +157,7 @@ export default function PacientesPage() {
                 )}
                 <button 
                   onClick={() => handleDeletePatient(patient.id)}
-                  className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                  className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                   title="Excluir paciente"
                 >
                   <Trash2 size={16} />
@@ -138,7 +168,7 @@ export default function PacientesPage() {
         </div>
       )}
 
-      {/* MODAL RESPONSIVO PARA ADICIONAR PACIENTE */}
+      {/* MODAL PARA ADICIONAR PACIENTE */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6 relative space-y-4">
@@ -181,7 +211,7 @@ export default function PacientesPage() {
 
               <div className="flex justify-end gap-3 pt-4 border-t">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 font-medium text-sm">Cancelar</button>
-                <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm">Salvar Paciente</button>
+                <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm cursor-pointer">Salvar Paciente</button>
               </div>
             </form>
           </div>
